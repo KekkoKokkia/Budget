@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budget Familiare</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #F7F7F5; --surface: #FFFFFF; --border: #E8E6E1;
+    --text: #1A1A18; --text-muted: #8A8880;
+    --green: #2D7A4F; --green-bg: #EBF5F0;
+    --red: #C0392B; --red-bg: #FDEDEC;
+    --yellow: #B7770D; --yellow-bg: #FEF9EC;
+    --accent: #2C3E50;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.5; padding: 0 0 40px; }
+  header { background: var(--accent); color: white; padding: 20px 16px 16px; position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  header p { font-size: 12px; opacity: 0.6; margin-top: 2px; }
+  .refresh-btn { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.15); border: none; color: white; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  section { margin: 16px 12px 0; }
+  .section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; padding-left: 2px; }
+  .saldi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .saldo-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .saldo-card.negativo { background: var(--red-bg); border-color: #F5C6C2; }
+  .saldo-nome { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .saldo-importo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+  .saldo-importo.negativo { color: var(--red); }
+  .saldo-importo.positivo { color: var(--green); }
+  .progressivo-table { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .prog-row { display: grid; grid-template-columns: 72px repeat(5, 1fr); border-bottom: 1px solid var(--border); font-size: 11px; }
+  .prog-row:last-child { border-bottom: none; }
+  .prog-row.header { background: var(--accent); color: white; font-weight: 600; font-size: 10px; }
+  .prog-row.rosso { background: var(--red-bg); }
+  .prog-row.warning { background: var(--yellow-bg); }
+  .prog-cell { padding: 7px 5px; text-align: right; border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prog-cell:first-child { text-align: left; }
+  .prog-cell:last-child { border-right: none; }
+  .prog-row.header .prog-cell { border-right-color: rgba(255,255,255,0.2); }
+  .spesa-label { font-size: 10px; color: var(--text-muted); padding: 3px 8px; background: var(--bg); border-bottom: 1px solid var(--border); grid-column: 1 / -1; }
+  .val-neg { color: var(--red); font-weight: 600; }
+  .val-pos { color: var(--green); }
+  .pivot-table { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .pivot-row { display: grid; grid-template-columns: 1fr 70px 70px 70px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .pivot-row:last-child { border-bottom: none; }
+  .pivot-row.header { background: var(--accent); color: white; font-weight: 600; font-size: 10px; }
+  .pivot-row.sforato { background: var(--red-bg); }
+  .pivot-row.ok { background: var(--green-bg); }
+  .pivot-cell { padding: 8px; text-align: right; border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pivot-cell:first-child { text-align: left; }
+  .pivot-cell:last-child { border-right: none; }
+  .pivot-row.header .pivot-cell { border-right-color: rgba(255,255,255,0.2); }
+  .loading { text-align: center; color: var(--text-muted); padding: 40px 20px; font-size: 13px; }
+  .error { text-align: center; color: var(--red); padding: 20px; font-size: 13px; background: var(--red-bg); border-radius: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Budget Familiare</h1>
+  <p id="last-update">Caricamento...</p>
+  <button class="refresh-btn" onclick="loadData()">↻ Aggiorna</button>
+</header>
+<section>
+  <div class="section-title">Saldi attuali</div>
+  <div class="saldi-grid" id="saldi-container"><div class="loading">Caricamento...</div></div>
+</section>
+<section>
+  <div class="section-title">Progressivo mese</div>
+  <div id="progressivo-container"><div class="loading">Caricamento...</div></div>
+</section>
+<section>
+  <div class="section-title">Spese per categoria</div>
+  <div id="pivot-container"><div class="loading">Caricamento...</div></div>
+</section>
+
+<script>
+const SHEET_ID = '1GSdsAyeQzmTuFfSeSL5gu5zBBfdOkxqSgOs-oMRo23A';
+const URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Dashboard`;
+
+function fmt(val) {
+  const n = parseFloat(val);
+  if (isNaN(n)) return '—';
+  return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 }).format(n);
+}
+
+function cellVal(c) {
+  if (!c) return '';
+  // Per le date Google restituisce numero seriale — usiamo f (formatted) se disponibile
+  return c.f !== undefined && c.f !== null ? c.f : (c.v !== null && c.v !== undefined ? c.v : '');
+}
+
+function cellNum(c) {
+  if (!c || c.v === null || c.v === undefined) return null;
+  return parseFloat(c.v);
+}
+
+function parseData(rows) {
+  // La prima riga è usata come header da Google (label colonne)
+  // I dati iniziano dalla riga 0 dell'array rows
+  // Struttura Dashboard:
+  // righe 0-5: saldi (col A=conto, B=importo, C=data)
+  // riga 6: "Progressivo" label
+  // riga 7: header progressivo (Data, CheBanca, CA, ING, BBVA, Contanti, Spesa)
+  // righe 8-N: dati progressivo
+  // poi riga vuota
+  // poi "Pivot Categorie"
+  // poi header pivot
+  // poi dati pivot
+
+  const saldi = [];
+  const progressivo = [];
+  const pivot = [];
+
+  let section = 'saldi';
+  let skipNext = false;
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].c;
+    const a = r[0] ? String(r[0].v || '').trim() : '';
+
+    if (a === 'Progressivo') { section = 'prog'; skipNext = true; continue; }
+    if (a === 'Pivot Categorie') { section = 'pivot'; skipNext = true; continue; }
+    if (skipNext) { skipNext = false; continue; }
+    if (a === '' && !r[1]) continue; // riga vuota
+
+    if (section === 'saldi') {
+      const imp = cellNum(r[1]);
+      if (a && imp !== null) {
+        saldi.push({ conto: a, importo: imp });
+      }
+    } else if (section === 'prog') {
+      const data = a;
+      if (data && data.length > 0) {
+        progressivo.push({
+          data: data,
+          chebanca: cellNum(r[1]),
+          ca: cellNum(r[2]),
+          ing: cellNum(r[3]),
+          bbva: cellNum(r[4]),
+          contanti: cellNum(r[5]),
+          spesa: r[6] ? String(r[6].v || '') : ''
+        });
+      }
+    } else if (section === 'pivot') {
+      if (a && a !== 'Totale complessivo') {
+        pivot.push({
+          categoria: a,
+          effettivo: cellNum(r[1]),
+          previsto: cellNum(r[2]),
+          scostamento: cellNum(r[3])
+        });
+      }
+    }
+  }
+
+  return { saldi, progressivo, pivot };
+}
+
+function renderSaldi(saldi) {
+  const el = document.getElementById('saldi-container');
+  if (!saldi.length) { el.innerHTML = '<div class="error">Nessun dato saldi</div>'; return; }
+  const totale = saldi.reduce((s, r) => s + (r.importo || 0), 0);
+  let html = saldi.map(s => {
+    const neg = s.importo < 0;
+    return `<div class="saldo-card ${neg ? 'negativo' : ''}">
+      <div class="saldo-nome">${s.conto}</div>
+      <div class="saldo-importo ${neg ? 'negativo' : 'positivo'}">${fmt(s.importo)}</div>
+    </div>`;
+  }).join('');
+  html += `<div class="saldo-card" style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;">
+    <div class="saldo-nome" style="font-weight:600;color:var(--text)">Totale</div>
+    <div class="saldo-importo ${totale < 0 ? 'negativo' : 'positivo'}">${fmt(totale)}</div>
+  </div>`;
+  el.innerHTML = html;
+}
+
+function renderProgressivo(prog) {
+  const el = document.getElementById('progressivo-container');
+  if (!prog.length) { el.innerHTML = '<div class="error">Nessun dato progressivo</div>'; return; }
+  let html = `<div class="progressivo-table">
+    <div class="prog-row header">
+      <div class="prog-cell">Data</div>
+      <div class="prog-cell">CheBanca</div>
+      <div class="prog-cell">CA</div>
+      <div class="prog-cell">ING</div>
+      <div class="prog-cell">BBVA</div>
+      <div class="prog-cell">Cont.</div>
+    </div>`;
+  prog.forEach(r => {
+    const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
+    const hasNeg = vals.some(v => v !== null && v < 0);
+    const hasLow = !hasNeg && vals.some(v => v !== null && v < 50);
+    const rowClass = hasNeg ? 'rosso' : hasLow ? 'warning' : '';
+    // Mostra solo gg/mm dalla data
+    let d = String(r.data || '');
+    if (d.length >= 5) d = d.substring(0, 5);
+    html += `<div class="prog-row ${rowClass}">
+      <div class="prog-cell">${d}</div>
+      ${vals.map(v => `<div class="prog-cell ${v !== null && v < 0 ? 'val-neg' : ''}">${v !== null ? fmt(v) : '—'}</div>`).join('')}
+    </div>`;
+    if (r.spesa) {
+      html += `<div class="prog-row"><div class="spesa-label">${r.spesa}</div></div>`;
+    }
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderPivot(pivot) {
+  const el = document.getElementById('pivot-container');
+  if (!pivot.length) { el.innerHTML = '<div class="error">Nessun dato pivot</div>'; return; }
+  let html = `<div class="pivot-table">
+    <div class="pivot-row header">
+      <div class="pivot-cell">Categoria</div>
+      <div class="pivot-cell">Effett.</div>
+      <div class="pivot-cell">Prev.</div>
+      <div class="pivot-cell">Scost.</div>
+    </div>`;
+  pivot.forEach(r => {
+    const sc = r.scostamento || 0;
+    const rowClass = sc < -5 ? 'sforato' : sc > 5 ? 'ok' : '';
+    html += `<div class="pivot-row ${rowClass}">
+      <div class="pivot-cell">${r.categoria}</div>
+      <div class="pivot-cell">${fmt(r.effettivo)}</div>
+      <div class="pivot-cell">${fmt(r.previsto)}</div>
+      <div class="pivot-cell ${sc < 0 ? 'val-neg' : 'val-pos'}">${fmt(sc)}</div>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function loadData() {
+  document.getElementById('last-update').textContent = 'Aggiornamento...';
+  try {
+    const res = await fetch(URL + '&nocache=' + Date.now());
+    const text = await res.text();
+    const json = JSON.parse(text.replace(/^[^{]+/, '').replace(/[^}]+$/, ''));
+    const rows = json.table.rows;
+    const data = parseData(rows);
+    renderSaldi(data.saldi);
+    renderProgressivo(data.progressivo);
+    renderPivot(data.pivot);
+    const now = new Date().toLocaleString('it-IT', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    document.getElementById('last-update').textContent = 'Aggiornato ' + now;
+  } catch(e) {
+    document.getElementById('last-update').textContent = 'Errore caricamento';
+    console.error(e);
+  }
+}
+
+loadData();
+</script>
+</body>
+</html>
