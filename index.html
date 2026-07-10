@@ -199,8 +199,16 @@ function renderProgressivo(prog) {
 
   let sourceIndex = -1;
 
-  if (idx > 0) {
-    const prev = prog[idx - 1];
+  let prevDifferentDay = -1;
+  for (let p = idx - 1; p >= 0; p--) {
+    if ((prog[p].data || '') !== (r.data || '')) {
+      prevDifferentDay = p;
+      break;
+    }
+  }
+
+  if (prevDifferentDay >= 0) {
+    const prev = prog[prevDifferentDay];
     const prevVals = [prev.chebanca, prev.ca, prev.ing, prev.bbva, prev.contanti];
 
     let maxDrop = 0;
