@@ -139,7 +139,8 @@ function parseData(rows) {
           ing: cellNum(r[3]),
           bbva: cellNum(r[4]),
           contanti: cellNum(r[5]),
-          spesa: r[6] ? String(r[6].v || '') : ''
+          spesa: r[6] ? String(r[6].v || '') : '',
+          importo: cellNum(r[7])
         });
       }
     } else if (section === 'pivot') {
