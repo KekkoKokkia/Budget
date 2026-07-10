@@ -197,7 +197,7 @@ function renderProgressivo(prog) {
   const hasLow = !hasNeg && vals.some(v => v !== null && v < 50);
   const rowClass = hasNeg ? 'rosso' : hasLow ? 'warning' : '';
 
-  let sourceIndex = -1;
+  let changedIndexes = [];
 
   let prevDifferentDay = -1;
   for (let p = idx - 1; p >= 0; p--) {
@@ -211,14 +211,9 @@ function renderProgressivo(prog) {
     const prev = prog[prevDifferentDay];
     const prevVals = [prev.chebanca, prev.ca, prev.ing, prev.bbva, prev.contanti];
 
-    let maxDrop = 0;
     for (let i = 0; i < vals.length; i++) {
-      if (vals[i] !== null && prevVals[i] !== null) {
-        const diff = vals[i] - prevVals[i];
-        if (diff < maxDrop) {
-          maxDrop = diff;
-          sourceIndex = i;
-        }
+      if (vals[i] !== null && prevVals[i] !== null && vals[i] < prevVals[i]) {
+        changedIndexes.push(i);
       }
     }
   }
@@ -231,7 +226,7 @@ function renderProgressivo(prog) {
     ${vals.map((v, i) => {
       const extraClass = [
         v !== null && v < 0 ? 'val-neg' : '',
-        i === sourceIndex ? 'spesa-source' : ''
+        changedIndexes.includes(i) ? 'spesa-source' : ''
       ].filter(Boolean).join(' ');
       return `<div class="prog-cell ${extraClass}">${v !== null ? fmt(v) : '—'}</div>`;
     }).join('')}
