@@ -191,22 +191,48 @@ function renderProgressivo(prog) {
       <div class="prog-cell">BBVA</div>
       <div class="prog-cell">Cont.</div>
     </div>`;
-  prog.forEach(r => {
-    const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
-    const hasNeg = vals.some(v => v !== null && v < 0);
-    const hasLow = !hasNeg && vals.some(v => v !== null && v < 50);
-    const rowClass = hasNeg ? 'rosso' : hasLow ? 'warning' : '';
-    // Mostra solo gg/mm dalla data
-    let d = String(r.data || '');
-    if (d.length >= 5) d = d.substring(0, 5);
-    html += `<div class="prog-row ${rowClass}">
-      <div class="prog-cell">${d}</div>
-      ${vals.map(v => `<div class="prog-cell ${v !== null && v < 0 ? 'val-neg' : ''}">${v !== null ? fmt(v) : '—'}</div>`).join('')}
-    </div>`;
-   if (r.spesa) {
-  html += `<div class="prog-row"><div class="spesa-label">${r.spesa} — ${fmt(r.importo)}</div></div>`;
-}
-  });
+  prog.forEach((r, idx) => {
+  const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
+  const hasNeg = vals.some(v => v !== null && v < 0);
+  const hasLow = !hasNeg && vals.some(v => v !== null && v < 50);
+  const rowClass = hasNeg ? 'rosso' : hasLow ? 'warning' : '';
+
+  let sourceIndex = -1;
+
+  if (idx > 0) {
+    const prev = prog[idx - 1];
+    const prevVals = [prev.chebanca, prev.ca, prev.ing, prev.bbva, prev.contanti];
+
+    let maxDrop = 0;
+    for (let i = 0; i < vals.length; i++) {
+      if (vals[i] !== null && prevVals[i] !== null) {
+        const diff = vals[i] - prevVals[i];
+        if (diff < maxDrop) {
+          maxDrop = diff;
+          sourceIndex = i;
+        }
+      }
+    }
+  }
+
+  let d = String(r.data || '');
+  if (d.length >= 5) d = d.substring(0, 5);
+
+  html += `<div class="prog-row ${rowClass}">
+    <div class="prog-cell">${d}</div>
+    ${vals.map((v, i) => {
+      const extraClass = [
+        v !== null && v < 0 ? 'val-neg' : '',
+        i === sourceIndex ? 'spesa-source' : ''
+      ].filter(Boolean).join(' ');
+      return `<div class="prog-cell ${extraClass}">${v !== null ? fmt(v) : '—'}</div>`;
+    }).join('')}
+  </div>`;
+
+  if (r.spesa) {
+    html += `<div class="prog-row"><div class="spesa-label">${r.spesa} — ${fmt(r.importo)}</div></div>`;
+  }
+});
   html += '</div>';
   el.innerHTML = html;
 }
