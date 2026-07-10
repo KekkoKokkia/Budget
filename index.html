@@ -199,8 +199,8 @@ function renderProgressivo(prog) {
       <div class="prog-cell">${d}</div>
       ${vals.map(v => `<div class="prog-cell ${v !== null && v < 0 ? 'val-neg' : ''}">${v !== null ? fmt(v) : '—'}</div>`).join('')}
     </div>`;
-    if (r.spesa) {
-  html += `<div class="prog-row"><div class="spesa-label">${r.spesa}${r.importo !== null ? ' — ' + fmt(r.importo) : ''}</div></div>`;
+   if (r.spesa) {
+  html += `<div class="prog-row"><div class="spesa-label">${r.spesa} — ${fmt(r.importo)}</div></div>`;
 }
   });
   html += '</div>';
