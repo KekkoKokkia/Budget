@@ -79,7 +79,7 @@
 
 <script>
 const SHEET_ID = '1GSdsAyeQzmTuFfSeSL5gu5zBBfdOkxqSgOs-oMRo23A';
-const URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Dashboard`;
+const BASE_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Dashboard&headers=1`;
 
 function fmt(val) {
   const n = parseFloat(val);
@@ -95,17 +95,26 @@ function cellVal(c) {
 }
 
 function cellNum(c) {
-  if (!c || c.v === null || c.v === undefined || c.v === '') return null;
-  const n = typeof c.v === 'number'
-    ? c.v
-    : Number(String(c.v).replace(',', '.'));
+  if (!c) return null;
+  if (typeof c.v === 'number' && Number.isFinite(c.v)) return c.v;
+  if (c.v === null || c.v === undefined || c.v === '') {
+    if (c.f === undefined || c.f === null || c.f === '') return null;
+  }
+
+  // Fallback per eventuali numeri restituiti come testo in formato italiano.
+  const raw = String(c.v !== undefined && c.v !== null && c.v !== '' ? c.v : c.f)
+    .replace(/\s/g, '')
+    .replace(/[€]/g, '');
+  const normalized = raw.includes(',')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : raw;
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
 }
 
 function dateText(c) {
   if (!c) return '';
 
-  // Prima scelta: data già formattata da Google Sheets (es. 02/11/2026).
   const formatted = c.f !== undefined && c.f !== null ? String(c.f).trim() : '';
   const value = c.v;
 
@@ -116,18 +125,16 @@ function dateText(c) {
     }
   }
 
-  // Google Visualization può restituire le date come Date(2026,10,2).
   if (typeof value === 'string') {
     const matchGoogleDate = value.match(/^Date\((\d{4}),(\d{1,2}),(\d{1,2})\)$/);
     if (matchGoogleDate) {
       const year = Number(matchGoogleDate[1]);
-      const month = Number(matchGoogleDate[2]) + 1; // mese Google: parte da 0
+      const month = Number(matchGoogleDate[2]) + 1;
       const day = Number(matchGoogleDate[3]);
       return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
     }
   }
 
-  // Fallback nel caso in cui il valore sia già una data JavaScript.
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return `${String(value.getDate()).padStart(2, '0')}/${String(value.getMonth() + 1).padStart(2, '0')}/${value.getFullYear()}`;
   }
@@ -135,68 +142,83 @@ function dateText(c) {
   return formatted || (value === undefined || value === null ? '' : String(value));
 }
 
-function parseData(rows) {
-  // Il Dashboard ora ha tre aree indipendenti:
-  // Saldi:       A3:B8
-  // Progressivo: A13:H (numero di righe variabile)
-  // Pivot:       J14:M (numero di categorie variabile)
-  // La lettura avviene per colonne e contenuto, non cercando sezioni una sotto l'altra.
+// Estrae il JSON dalla risposta Google Visualization.
+async function fetchRange(range) {
+  const url = `${BASE_URL}&range=${encodeURIComponent(range)}&nocache=${Date.now()}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Errore Google Sheets (${res.status}) per l'intervallo ${range}`);
 
-  const saldi = [];
-  const progressivo = [];
-  const pivot = [];
-  const contiAttesi = new Set(['CheBanca', 'CA', 'ING', 'BBVA', 'Contanti', 'Risparmi']);
-
-  for (const row of rows) {
-    const r = row && row.c ? row.c : [];
-
-    // 1. Saldi: riconosce soltanto i nomi dei conti attesi in colonna A.
-    const nomeConto = cellVal(r[0]);
-    if (contiAttesi.has(nomeConto)) {
-      const importoSaldo = cellNum(r[1]);
-      if (importoSaldo !== null) {
-        saldi.push({ conto: nomeConto, importo: importoSaldo });
-      }
-    }
-
-    // 2. Progressivo: data in A, saldi in B:F, spesa in G, importo in H.
-    const dataProgressivo = dateText(r[0]);
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataProgressivo)) {
-      const valoriConti = [1, 2, 3, 4, 5].map(index => cellNum(r[index]));
-      // Evita di interpretare come progressivo una riga che contiene solo una data.
-      if (valoriConti.some(value => value !== null)) {
-        progressivo.push({
-          data: dataProgressivo,
-          chebanca: valoriConti[0],
-          ca: valoriConti[1],
-          ing: valoriConti[2],
-          bbva: valoriConti[3],
-          contanti: valoriConti[4],
-          spesa: cellVal(r[6]),
-          importo: cellNum(r[7])
-        });
-      }
-    }
-
-    // 3. Pivot: ora è nelle colonne J:M (indici 9:12), non in A:D.
-    const categoria = cellVal(r[9]);
-    if (categoria && !['Pivot Categorie', 'Categoria', 'Totale complessivo'].includes(categoria)) {
-      const effettivo = cellNum(r[10]);
-      const previsto = cellNum(r[11]);
-      const scostamento = cellNum(r[12]);
-
-      if (effettivo !== null || previsto !== null || scostamento !== null) {
-        pivot.push({
-          categoria,
-          effettivo,
-          previsto,
-          scostamento
-        });
-      }
-    }
+  const text = await res.text();
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace < 0 || lastBrace < firstBrace) {
+    throw new Error(`Risposta Google Sheets non valida per l'intervallo ${range}`);
   }
 
-  return { saldi, progressivo, pivot };
+  const json = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+  if (json.status === 'error') {
+    throw new Error(json.errors?.[0]?.detailed_message || `Errore nella lettura dell'intervallo ${range}`);
+  }
+  return json.table?.rows || [];
+}
+
+function parseSaldi(rows) {
+  const contiAttesi = new Set(['CheBanca', 'CA', 'ING', 'BBVA', 'Contanti', 'Risparmi']);
+  const saldi = [];
+
+  for (const row of rows) {
+    const r = row?.c || [];
+    const conto = cellVal(r[0]);
+    const importo = cellNum(r[1]);
+    if (contiAttesi.has(conto) && importo !== null) {
+      saldi.push({ conto, importo });
+    }
+  }
+  return saldi;
+}
+
+function parseProgressivo(rows) {
+  const progressivo = [];
+
+  for (const row of rows) {
+    const r = row?.c || [];
+    const data = dateText(r[0]);
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(data)) continue;
+
+    const valoriConti = [1, 2, 3, 4, 5].map(index => cellNum(r[index]));
+    if (!valoriConti.some(value => value !== null)) continue;
+
+    progressivo.push({
+      data,
+      chebanca: valoriConti[0],
+      ca: valoriConti[1],
+      ing: valoriConti[2],
+      bbva: valoriConti[3],
+      contanti: valoriConti[4],
+      spesa: cellVal(r[6]),
+      importo: cellNum(r[7])
+    });
+  }
+  return progressivo;
+}
+
+function parsePivot(rows) {
+  const pivot = [];
+
+  for (const row of rows) {
+    const r = row?.c || [];
+    const categoria = cellVal(r[0]);
+    if (!categoria || ['Categoria', 'Totale complessivo'].includes(categoria)) continue;
+
+    const effettivo = cellNum(r[1]);
+    const previsto = cellNum(r[2]);
+    const scostamento = cellNum(r[3]);
+
+    if (effettivo !== null || previsto !== null || scostamento !== null) {
+      pivot.push({ categoria, effettivo, previsto, scostamento });
+    }
+  }
+  return pivot;
 }
 
 function renderSaldi(saldi) {
@@ -305,18 +327,29 @@ function renderPivot(pivot) {
 async function loadData() {
   document.getElementById('last-update').textContent = 'Aggiornamento...';
   try {
-    const res = await fetch(URL + '&nocache=' + Date.now());
-    const text = await res.text();
-    const json = JSON.parse(text.replace(/^[^{]+/, '').replace(/[^}]+$/, ''));
-    const rows = json.table.rows;
-    const data = parseData(rows);
-    renderSaldi(data.saldi);
-    renderProgressivo(data.progressivo);
-    renderPivot(data.pivot);
-    const now = new Date().toLocaleString('it-IT', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    // Intervalli distinti: evitano che Google interpreti male la colonna A,
+    // che contiene sia nomi di conti sia date in sezioni diverse.
+    const [righeSaldi, righeProgressivo, righePivot] = await Promise.all([
+      fetchRange('A2:C8'),
+      fetchRange('A12:H1000'),
+      fetchRange('J12:M1000')
+    ]);
+
+    const saldi = parseSaldi(righeSaldi);
+    const progressivo = parseProgressivo(righeProgressivo);
+    const pivot = parsePivot(righePivot);
+
+    renderSaldi(saldi);
+    renderProgressivo(progressivo);
+    renderPivot(pivot);
+
+    const now = new Date().toLocaleString('it-IT', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
     document.getElementById('last-update').textContent = 'Aggiornato ' + now;
-  } catch(e) {
+  } catch (e) {
     document.getElementById('last-update').textContent = 'Errore caricamento';
+    document.getElementById('saldi-container').innerHTML = '<div class="error">Errore nel caricamento dei saldi</div>';
     console.error(e);
   }
 }
