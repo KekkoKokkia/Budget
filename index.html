@@ -89,70 +89,108 @@ function fmt(val) {
 
 function cellVal(c) {
   if (!c) return '';
-  // Per le date Google restituisce numero seriale — usiamo f (formatted) se disponibile
-  return c.f !== undefined && c.f !== null ? c.f : (c.v !== null && c.v !== undefined ? c.v : '');
+  if (c.f !== undefined && c.f !== null && c.f !== '') return String(c.f).trim();
+  if (c.v === undefined || c.v === null) return '';
+  return String(c.v).trim();
 }
 
 function cellNum(c) {
-  if (!c || c.v === null || c.v === undefined) return null;
-  return parseFloat(c.v);
+  if (!c || c.v === null || c.v === undefined || c.v === '') return null;
+  const n = typeof c.v === 'number'
+    ? c.v
+    : Number(String(c.v).replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+function dateText(c) {
+  if (!c) return '';
+
+  // Prima scelta: data già formattata da Google Sheets (es. 02/11/2026).
+  const formatted = c.f !== undefined && c.f !== null ? String(c.f).trim() : '';
+  const value = c.v;
+
+  if (formatted) {
+    const matchFormatted = formatted.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (matchFormatted) {
+      return `${matchFormatted[1].padStart(2, '0')}/${matchFormatted[2].padStart(2, '0')}/${matchFormatted[3]}`;
+    }
+  }
+
+  // Google Visualization può restituire le date come Date(2026,10,2).
+  if (typeof value === 'string') {
+    const matchGoogleDate = value.match(/^Date\((\d{4}),(\d{1,2}),(\d{1,2})\)$/);
+    if (matchGoogleDate) {
+      const year = Number(matchGoogleDate[1]);
+      const month = Number(matchGoogleDate[2]) + 1; // mese Google: parte da 0
+      const day = Number(matchGoogleDate[3]);
+      return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+    }
+  }
+
+  // Fallback nel caso in cui il valore sia già una data JavaScript.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${String(value.getDate()).padStart(2, '0')}/${String(value.getMonth() + 1).padStart(2, '0')}/${value.getFullYear()}`;
+  }
+
+  return formatted || (value === undefined || value === null ? '' : String(value));
 }
 
 function parseData(rows) {
-  // La prima riga è usata come header da Google (label colonne)
-  // I dati iniziano dalla riga 0 dell'array rows
-  // Struttura Dashboard:
-  // righe 0-5: saldi (col A=conto, B=importo, C=data)
-  // riga 6: "Progressivo" label
-  // riga 7: header progressivo (Data, CheBanca, CA, ING, BBVA, Contanti, Spesa)
-  // righe 8-N: dati progressivo
-  // poi riga vuota
-  // poi "Pivot Categorie"
-  // poi header pivot
-  // poi dati pivot
+  // Il Dashboard ora ha tre aree indipendenti:
+  // Saldi:       A3:B8
+  // Progressivo: A13:H (numero di righe variabile)
+  // Pivot:       J14:M (numero di categorie variabile)
+  // La lettura avviene per colonne e contenuto, non cercando sezioni una sotto l'altra.
 
   const saldi = [];
   const progressivo = [];
   const pivot = [];
+  const contiAttesi = new Set(['CheBanca', 'CA', 'ING', 'BBVA', 'Contanti', 'Risparmi']);
 
-  let section = 'saldi';
-  let skipNext = false;
+  for (const row of rows) {
+    const r = row && row.c ? row.c : [];
 
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i].c;
-    const a = r[0] ? String(r[0].v || '').trim() : '';
-
-    if (a === 'Progressivo') { section = 'prog'; skipNext = true; continue; }
-    if (a === 'Pivot Categorie') { section = 'pivot'; skipNext = true; continue; }
-    if (skipNext) { skipNext = false; continue; }
-    if (a === '' && !r[1]) continue; // riga vuota
-
-    if (section === 'saldi') {
-      const imp = cellNum(r[1]);
-      if (a && imp !== null) {
-        saldi.push({ conto: a, importo: imp });
+    // 1. Saldi: riconosce soltanto i nomi dei conti attesi in colonna A.
+    const nomeConto = cellVal(r[0]);
+    if (contiAttesi.has(nomeConto)) {
+      const importoSaldo = cellNum(r[1]);
+      if (importoSaldo !== null) {
+        saldi.push({ conto: nomeConto, importo: importoSaldo });
       }
-    } else if (section === 'prog') {
-      const data = a;
-      if (data && data.length > 0) {
+    }
+
+    // 2. Progressivo: data in A, saldi in B:F, spesa in G, importo in H.
+    const dataProgressivo = dateText(r[0]);
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataProgressivo)) {
+      const valoriConti = [1, 2, 3, 4, 5].map(index => cellNum(r[index]));
+      // Evita di interpretare come progressivo una riga che contiene solo una data.
+      if (valoriConti.some(value => value !== null)) {
         progressivo.push({
-          data: data,
-          chebanca: cellNum(r[1]),
-          ca: cellNum(r[2]),
-          ing: cellNum(r[3]),
-          bbva: cellNum(r[4]),
-          contanti: cellNum(r[5]),
-          spesa: r[6] ? String(r[6].v || '') : '',
+          data: dataProgressivo,
+          chebanca: valoriConti[0],
+          ca: valoriConti[1],
+          ing: valoriConti[2],
+          bbva: valoriConti[3],
+          contanti: valoriConti[4],
+          spesa: cellVal(r[6]),
           importo: cellNum(r[7])
         });
       }
-    } else if (section === 'pivot') {
-      if (a && a !== 'Totale complessivo') {
+    }
+
+    // 3. Pivot: ora è nelle colonne J:M (indici 9:12), non in A:D.
+    const categoria = cellVal(r[9]);
+    if (categoria && !['Pivot Categorie', 'Categoria', 'Totale complessivo'].includes(categoria)) {
+      const effettivo = cellNum(r[10]);
+      const previsto = cellNum(r[11]);
+      const scostamento = cellNum(r[12]);
+
+      if (effettivo !== null || previsto !== null || scostamento !== null) {
         pivot.push({
-          categoria: a,
-          effettivo: cellNum(r[1]),
-          previsto: cellNum(r[2]),
-          scostamento: cellNum(r[3])
+          categoria,
+          effettivo,
+          previsto,
+          scostamento
         });
       }
     }
