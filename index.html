@@ -37,8 +37,11 @@
   .prog-cell { padding: 7px 5px; text-align: right; border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prog-cell:first-child { text-align: left; }
   .prog-cell:last-child { border-right: none; }
+  /* Evidenzia soltanto la data dell'evento e le celle dei conti interessati. */
   .prog-cell.alert-date { background: var(--red-bg); color: var(--red); font-weight: 700; }
+  .prog-cell.transaction-date { background: #FEF9EC; color: #8A5A00; font-weight: 600; }
   .prog-cell.account-negative { background: var(--red-bg); color: var(--red); font-weight: 700; }
+  .prog-cell.transaction-account { background: #FFE08A; color: #765000; font-weight: 700; }
   .prog-row.header .prog-cell { border-right-color: rgba(255,255,255,0.2); }
   .spesa-label { font-size: 10px; color: var(--text-muted); padding: 3px 8px; background: var(--bg); border-bottom: 1px solid var(--border); grid-column: 1 / -1; }
   .val-neg { color: var(--red); font-weight: 600; }
@@ -246,14 +249,18 @@ function renderProgressivo(prog) {
   const el = document.getElementById('progressivo-container');
   if (!prog.length) { el.innerHTML = '<div class="error">Nessun dato progressivo</div>'; return; }
 
-  // Collega il nome del conto presente nella colonna I al saldo mostrato.
+  // Collega il valore della colonna I al conto visualizzato nel Progressivo.
   const contoIndex = {
-    'CheBanca': 0,
-    'CA': 1,
-    'ING': 2,
-    'BBVA': 3,
-    'Contanti': 4
+    'chebanca': 0,
+    'ca': 1,
+    'ing': 2,
+    'bbva': 3,
+    'contanti': 4
   };
+
+  // Evita di colorare più volte la data se ci sono più movimenti
+  // dello stesso conto nello stesso giorno.
+  const eventiNegativiGiaEvidenziati = new Set();
 
   let html = `<div class="progressivo-table">
     <div class="prog-row header">
@@ -267,11 +274,15 @@ function renderProgressivo(prog) {
 
   prog.forEach((r, idx) => {
     const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
-    const targetIndex = contoIndex[String(r.conto || '').trim()];
-    const targetBalance = targetIndex === undefined ? null : vals[targetIndex];
+    const contoNormalizzato = String(r.conto || '').trim().toLocaleLowerCase('it-IT');
+    const targetIndex = Object.prototype.hasOwnProperty.call(contoIndex, contoNormalizzato)
+      ? contoIndex[contoNormalizzato]
+      : null;
+
+    const targetBalance = targetIndex === null ? null : vals[targetIndex];
     const targetIsNegative = targetBalance !== null && targetBalance !== undefined && targetBalance < 0;
 
-    // Trova l'ultima riga con una data precedente, ignorando le altre spese dello stesso giorno.
+    // Cerca la riga della data precedente (non la riga precedente dello stesso giorno).
     let previousDifferentDay = null;
     for (let p = idx - 1; p >= 0; p--) {
       if ((prog[p].data || '') !== (r.data || '')) {
@@ -280,30 +291,50 @@ function renderProgressivo(prog) {
       }
     }
 
+    // La data diventa rossa solo quando il conto associato a questa spesa
+    // passa da zero/positivo a negativo. Nelle date successive resta rosso
+    // l'importo del conto, ma non ripetiamo l'avviso sulla data.
     let crossedBelowZero = false;
-    if (targetIsNegative && previousDifferentDay) {
-      const previousVals = [
+    if (targetIndex !== null && targetIsNegative) {
+      const previousVals = previousDifferentDay ? [
         previousDifferentDay.chebanca,
         previousDifferentDay.ca,
         previousDifferentDay.ing,
         previousDifferentDay.bbva,
         previousDifferentDay.contanti
-      ];
-      const previousTargetBalance = previousVals[targetIndex];
-      crossedBelowZero = previousTargetBalance === null || previousTargetBalance === undefined || previousTargetBalance >= 0;
-    } else if (targetIsNegative && !previousDifferentDay) {
-      crossedBelowZero = true;
+      ] : null;
+      const previousTargetBalance = previousVals ? previousVals[targetIndex] : null;
+      crossedBelowZero = !previousDifferentDay || previousTargetBalance === null ||
+        previousTargetBalance === undefined || previousTargetBalance >= 0;
+
+      const eventKey = `${r.data}|${targetIndex}`;
+      if (crossedBelowZero && eventiNegativiGiaEvidenziati.has(eventKey)) {
+        crossedBelowZero = false;
+      } else if (crossedBelowZero) {
+        eventiNegativiGiaEvidenziati.add(eventKey);
+      }
     }
+
+    // Se il conto associato alla spesa è ancora positivo, usa il giallo:
+    // data in giallo chiaro e saldo del conto in giallo più intenso.
+    const dateClass = crossedBelowZero
+      ? 'alert-date'
+      : (targetIndex !== null && !targetIsNegative ? 'transaction-date' : '');
 
     const d = String(r.data || '');
     const shortDate = d.length >= 5 ? d.substring(0, 5) : d;
 
     html += `<div class="prog-row">
-      <div class="prog-cell ${crossedBelowZero ? 'alert-date' : ''}">${shortDate}</div>
+      <div class="prog-cell ${dateClass}">${shortDate}</div>
       ${vals.map((v, i) => {
-        const isTargetAccount = targetIndex === i;
-        const highlightAccount = isTargetAccount && targetIsNegative;
-        const extraClass = highlightAccount ? 'account-negative' : '';
+        // Ogni saldo negativo resta rosso a ogni riga successiva,
+        // indipendentemente dal conto della spesa corrente.
+        let extraClass = '';
+        if (v !== null && v !== undefined && v < 0) {
+          extraClass = 'account-negative';
+        } else if (targetIndex === i) {
+          extraClass = 'transaction-account';
+        }
         return `<div class="prog-cell ${extraClass}">${v !== null && v !== undefined ? fmt(v) : '—'}</div>`;
       }).join('')}
     </div>`;
