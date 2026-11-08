@@ -37,6 +37,8 @@
   .prog-cell { padding: 7px 5px; text-align: right; border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prog-cell:first-child { text-align: left; }
   .prog-cell:last-child { border-right: none; }
+  .prog-cell.alert-date { background: var(--red-bg); color: var(--red); font-weight: 700; }
+  .prog-cell.account-negative { background: var(--red-bg); color: var(--red); font-weight: 700; }
   .prog-row.header .prog-cell { border-right-color: rgba(255,255,255,0.2); }
   .spesa-label { font-size: 10px; color: var(--text-muted); padding: 3px 8px; background: var(--bg); border-bottom: 1px solid var(--border); grid-column: 1 / -1; }
   .val-neg { color: var(--red); font-weight: 600; }
@@ -196,7 +198,8 @@ function parseProgressivo(rows) {
       bbva: valoriConti[3],
       contanti: valoriConti[4],
       spesa: cellVal(r[6]),
-      importo: cellNum(r[7])
+      importo: cellNum(r[7]),
+      conto: cellVal(r[8])
     });
   }
   return progressivo;
@@ -242,6 +245,16 @@ function renderSaldi(saldi) {
 function renderProgressivo(prog) {
   const el = document.getElementById('progressivo-container');
   if (!prog.length) { el.innerHTML = '<div class="error">Nessun dato progressivo</div>'; return; }
+
+  // Collega il nome del conto presente nella colonna I al saldo mostrato.
+  const contoIndex = {
+    'CheBanca': 0,
+    'CA': 1,
+    'ING': 2,
+    'BBVA': 3,
+    'Contanti': 4
+  };
+
   let html = `<div class="progressivo-table">
     <div class="prog-row header">
       <div class="prog-cell">Data</div>
@@ -251,55 +264,58 @@ function renderProgressivo(prog) {
       <div class="prog-cell">BBVA</div>
       <div class="prog-cell">Cont.</div>
     </div>`;
+
   prog.forEach((r, idx) => {
-  const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
-  const hasNeg = vals.some(v => v !== null && v < 0);
-  const hasLow = !hasNeg && vals.some(v => v !== null && v < 50);
-  const rowClass = hasNeg ? 'rosso' : hasLow ? 'warning' : '';
+    const vals = [r.chebanca, r.ca, r.ing, r.bbva, r.contanti];
+    const targetIndex = contoIndex[String(r.conto || '').trim()];
+    const targetBalance = targetIndex === undefined ? null : vals[targetIndex];
+    const targetIsNegative = targetBalance !== null && targetBalance !== undefined && targetBalance < 0;
 
-  let changedIndexes = [];
-
-  let prevDifferentDay = -1;
-  for (let p = idx - 1; p >= 0; p--) {
-    if ((prog[p].data || '') !== (r.data || '')) {
-      prevDifferentDay = p;
-      break;
-    }
-  }
-
-  if (prevDifferentDay >= 0) {
-    const prev = prog[prevDifferentDay];
-    const prevVals = [prev.chebanca, prev.ca, prev.ing, prev.bbva, prev.contanti];
-
-    for (let i = 0; i < vals.length; i++) {
-      if (vals[i] !== null && prevVals[i] !== null && vals[i] < prevVals[i]) {
-        changedIndexes.push(i);
+    // Trova l'ultima riga con una data precedente, ignorando le altre spese dello stesso giorno.
+    let previousDifferentDay = null;
+    for (let p = idx - 1; p >= 0; p--) {
+      if ((prog[p].data || '') !== (r.data || '')) {
+        previousDifferentDay = prog[p];
+        break;
       }
     }
-  }
 
-  let d = String(r.data || '');
-  if (d.length >= 5) d = d.substring(0, 5);
+    let crossedBelowZero = false;
+    if (targetIsNegative && previousDifferentDay) {
+      const previousVals = [
+        previousDifferentDay.chebanca,
+        previousDifferentDay.ca,
+        previousDifferentDay.ing,
+        previousDifferentDay.bbva,
+        previousDifferentDay.contanti
+      ];
+      const previousTargetBalance = previousVals[targetIndex];
+      crossedBelowZero = previousTargetBalance === null || previousTargetBalance === undefined || previousTargetBalance >= 0;
+    } else if (targetIsNegative && !previousDifferentDay) {
+      crossedBelowZero = true;
+    }
 
-  html += `<div class="prog-row ${rowClass}">
-    <div class="prog-cell">${d}</div>
-    ${vals.map((v, i) => {
-      const extraClass = [
-        v !== null && v < 0 ? 'val-neg' : '',
-        changedIndexes.includes(i) ? 'spesa-source' : ''
-      ].filter(Boolean).join(' ');
-      return `<div class="prog-cell ${extraClass}">${v !== null ? fmt(v) : '—'}</div>`;
-    }).join('')}
-  </div>`;
+    const d = String(r.data || '');
+    const shortDate = d.length >= 5 ? d.substring(0, 5) : d;
 
-  if (r.spesa) {
-    html += `<div class="prog-row"><div class="spesa-label">${r.spesa} — ${fmt(r.importo)}</div></div>`;
-  }
-});
+    html += `<div class="prog-row">
+      <div class="prog-cell ${crossedBelowZero ? 'alert-date' : ''}">${shortDate}</div>
+      ${vals.map((v, i) => {
+        const isTargetAccount = targetIndex === i;
+        const highlightAccount = isTargetAccount && targetIsNegative;
+        const extraClass = highlightAccount ? 'account-negative' : '';
+        return `<div class="prog-cell ${extraClass}">${v !== null && v !== undefined ? fmt(v) : '—'}</div>`;
+      }).join('')}
+    </div>`;
+
+    if (r.spesa) {
+      html += `<div class="prog-row"><div class="spesa-label">${r.spesa} — ${fmt(r.importo)}</div></div>`;
+    }
+  });
+
   html += '</div>';
   el.innerHTML = html;
 }
-
 function renderPivot(pivot) {
   const el = document.getElementById('pivot-container');
   if (!pivot.length) { el.innerHTML = '<div class="error">Nessun dato pivot</div>'; return; }
