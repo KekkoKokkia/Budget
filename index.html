@@ -347,7 +347,7 @@ async function loadData() {
     // che contiene sia nomi di conti sia date in sezioni diverse.
     const [righeSaldi, righeProgressivo, righePivot] = await Promise.all([
       fetchRange('A2:C8'),
-      fetchRange('A12:H1000'),
+      fetchRange('A12:I1000'),
       fetchRange('J12:M1000')
     ]);
 
